@@ -14,7 +14,7 @@ import (
 
 // BitArray is a thread-safe implementation of a bit array.
 type BitArray struct {
-	mtx   sync.Mutex
+	mtx   sync.RWMutex
 	Bits  int      `json:"bits"`  // NOTE: persisted via reflect, must be exported
 	Elems []uint64 `json:"elems"` // NOTE: persisted via reflect, must be exported
 }
@@ -28,6 +28,42 @@ func NewBitArray(bits int) *BitArray {
 	return &BitArray{
 		Bits:  bits,
 		Elems: make([]uint64, (bits+63)/64),
+	}
+}
+
+// AddBitArray combines two bit arrays by taking the bitwise OR of the two. If
+// the two bit arrays have different lengths, AddBitArray right-pads the smaller
+// of the two bit-arrays with zeroes. Thus the size of the return value is the
+// maximum of the two provided bit arrays.
+func (bA *BitArray) AddBitArray(b *BitArray) {
+	if bA == nil || b == nil {
+		return
+	}
+	bA.mtx.Lock()
+	defer bA.mtx.Unlock()
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+
+	// Update bA's Bits count to be the max of the two
+	bA.Bits = cmtmath.MaxInt(bA.Bits, b.Bits)
+
+	// Resize bA's Elems if b is longer
+	if len(b.Elems) > len(bA.Elems) {
+		bA.Elems = append(bA.Elems, make([]uint64, len(b.Elems)-len(bA.Elems))...)
+	}
+
+	// Perform bitwise OR operation up to the length of b
+	for i := 0; i < len(b.Elems); i++ {
+		bA.Elems[i] |= b.Elems[i]
+	}
+}
+
+// Fill sets all bits to true
+func (bA *BitArray) Fill() {
+	bA.mtx.Lock()
+	defer bA.mtx.Unlock()
+	for i := 0; i < bA.Bits; i++ {
+		bA.setIndex(i, true)
 	}
 }
 
@@ -150,6 +186,12 @@ func (bA *BitArray) And(o *BitArray) *BitArray {
 		o.mtx.Unlock()
 	}()
 	return bA.and(o)
+}
+
+func (bA *BitArray) GetTrueIndices() []int {
+	bA.mtx.RLock()
+	defer bA.mtx.RUnlock()
+	return bA.getTrueIndices()
 }
 
 func (bA *BitArray) and(o *BitArray) *BitArray {

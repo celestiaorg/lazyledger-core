@@ -1,41 +1,53 @@
 package commands
 
 import (
-	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/spf13/cobra"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/syndtr/goleveldb/leveldb/util"
 
+	cfg "github.com/tendermint/tendermint/config"
 	"github.com/tendermint/tendermint/libs/log"
 )
 
-var CompactGoLevelDBCmd = &cobra.Command{
-	Use:     "experimental-compact-goleveldb",
-	Aliases: []string{"experimental_compact_goleveldb"},
-	Short:   "force compacts the CometBFT storage engine (only GoLevelDB supported)",
+var CompactCmd = &cobra.Command{
+	Use:     "experimental-compact",
+	Aliases: []string{"experimental_compact"},
+	Short:   "force compacts the CometBFT storage engine (supports GoLevelDB and Pebble)",
 	Long: `
-This is a temporary utility command that performs a force compaction on the state
-and blockstores to reduce disk space for a pruning node. This should only be run
-once the node has stopped. This command will likely be omitted in the future after
-the planned refactor to the storage engine.
+This command forces a compaction of the CometBFT storage engine.
 
-Currently, only GoLevelDB is supported.
-	`,
+Currently, GoLevelDB and Pebble are supported.
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if config.DBBackend != "goleveldb" {
-			return errors.New("compaction is currently only supported with goleveldb")
+		configFile, err := cmd.Flags().GetString("config")
+		if err != nil {
+			return err
 		}
 
-		compactGoLevelDBs(config.RootDir, logger)
-		return nil
+		conf := cfg.DefaultConfig()
+		conf.SetRoot(configFile)
+
+		logger := log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+
+		switch conf.DBBackend {
+		case "goleveldb":
+			return compactGoLevelDBs(conf.RootDir, logger)
+		case "pebble":
+			return compactPebbleDBs(conf.RootDir, logger)
+		default:
+			return fmt.Errorf("compaction is currently only supported with goleveldb and pebble, got %s", conf.DBBackend)
+		}
 	},
 }
 
-func compactGoLevelDBs(rootDir string, logger log.Logger) {
+func compactGoLevelDBs(rootDir string, logger log.Logger) error {
 	dbNames := []string{"state", "blockstore"}
 	o := &opt.Options{
 		DisableSeeksCompaction: true,
@@ -64,4 +76,30 @@ func compactGoLevelDBs(rootDir string, logger log.Logger) {
 		}()
 	}
 	wg.Wait()
+	return nil
+}
+
+func compactPebbleDBs(rootDir string, logger log.Logger) error {
+	dbNames := []string{"state", "blockstore", "evidence", "tx_index"}
+	for _, dbName := range dbNames {
+		dbPath := filepath.Join(rootDir, "data", dbName+".db")
+		logger.Info("Compacting db", "path", dbPath)
+
+		db, err := pebble.Open(dbPath, &pebble.Options{})
+		if err != nil {
+			return fmt.Errorf("failed to open db %s: %w", dbPath, err)
+		}
+
+		err = db.Compact(nil, nil, true)
+		if err != nil {
+			db.Close()
+			return fmt.Errorf("failed to compact db %s: %w", dbPath, err)
+		}
+
+		err = db.Close()
+		if err != nil {
+			return fmt.Errorf("failed to close db %s: %w", dbPath, err)
+		}
+	}
+	return nil
 }

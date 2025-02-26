@@ -222,7 +222,7 @@ func NewTestnetFromManifest(manifest Manifest, file string, ifd InfrastructureDa
 			ExternalIP:       extIP,
 			ProxyPort:        ind.Port,
 			Mode:             ModeValidator,
-			Database:         "goleveldb",
+			Database:         "pebble",
 			ABCIProtocol:     Protocol(testnet.ABCIProtocol),
 			PrivvalProtocol:  ProtocolFile,
 			StartAt:          nodeManifest.StartAt,
@@ -393,7 +393,7 @@ func (n Node) Validate(testnet Testnet) error {
 		return fmt.Errorf("invalid block sync setting %q", n.BlockSyncVersion)
 	}
 	switch n.Database {
-	case "goleveldb":
+	case "pebble":
 	default:
 		return fmt.Errorf("invalid database setting %q", n.Database)
 	}
